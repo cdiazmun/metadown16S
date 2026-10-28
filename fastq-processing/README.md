@@ -71,12 +71,21 @@ grep WARN SeqRunID_A.log >> SeqRunID_A_processed.log
 Long-story short, one would process amplicon sequencing reads to ensure a minimum quality and length, then merge forward and reverse reads and cluster the final, merged reads into operational taxonomic units (OTUs). OTUs would cluster very similar sequences into a single taxon (at a level of family, genus, species depending on the phylogeny), based on nucleotide identity percentage (threshold of 97%). This was later replaced by ASVs, which icorporates a model that learns from the (Illumina) sequencing errors on your samples to differentiate them from true genetic variation. Thisw way, exact sequences can be infered, referred to as amplicon sequence variants (ASVs), resolving differences as little as 1 nucleotide. This pipeline was developed by [Benjamin Callahan and colleagues](https://www.nature.com/articles/nmeth.3869) and implemented in the widely used [DADA2](https://benjjneb.github.io/dada2/) pipeline. That's the gold standard protocol for amplicon sequencing processing until the current day. The website has very nice tutorials for [bacterial 16S](https://benjjneb.github.io/dada2/tutorial.html), [fungal ITS](https://benjjneb.github.io/dada2/ITS_workflow.html), and [long-read PacBio full-length 16S](https://github.com/benjjneb/LRASManuscript) sequencing data. Since the tutorials have all the information needed, I won't detail any step, since they will basically repeat what it is already there. For any further question, error, or concern I recommend visiting their [GitHub Issues](https://github.com/benjjneb/dada2/issues), there will be someone that had that problem before you, for sure. 
 
 Just To have something to compare with, these are the parameters I used and the tracking of reads throughout the pipeline:
-- **Filter and Trim**. truncLen: 270; maxN:0; maxEE:2; truncQ:2. For the same sequencing facility, depending on the sequencing batch, I retained here around 87% of all reads. 
-- **Learn Error Rates**. Example: *122,641,020 total bases in 454,226 reads from 2 samples will be used for learning the error rates*.
-- **Sample Inference**. Example: *1,990 sequence variants were inferred from 24,275 input unique sequences*.
-- **Merge paired reads**. Example: *378,981 paired-reads (in 11,427 unique pairings) successfully merged out of 409,055 (in 25,532 pairings) input*. Here I loose around 15% of the reads. 
-- **Construct sequence table**. Example: *93,082 ASVs in 33 samples*.
-- **Remove chimeras**. Example: *Identified 81688 bimeras out of 93082 input sequences. 11,394 ASVs in 33 samples*. Here there's a lot of variation from one sample to another. On average, I lost around 25% of the reads.
+- **Filter and Trim**. truncLen: 270; maxN:0; maxEE:2; truncQ:2.
+- **Learn Error Rates**. *122,641,020 total bases in 454,226 reads from 2 samples will be used for learning the error rates*.
+- **Sample Inference**. *1,990 sequence variants were inferred from 24,275 input unique sequences*.
+- **Merge paired reads**. *378,981 paired-reads (in 11,427 unique pairings) successfully merged out of 409,055 (in 25,532 pairings) input*. 
+- **Construct sequence table**. *93,082 ASVs in 33 samples*.
+- **Remove chimeras**. *Identified 81688 bimeras out of 93082 input sequences. 11,394 ASVs in 33 samples*.
 
-You should always aim to have more than 50% of your total input reads retained by the end of the pipeline. If you removed too many during **Filter and Trim**, relax the parameters; if you loose a lot during **Merge paired reads** check that you did not trim too much (ITS are tricky here and you may even need to proceed just with FW reads); if you loose a lot during **Remove chimeras** then check tha primer removal or...maybe the PCR was not so good on the first place. 
+You should always aim to have more than 50% of your total input reads retained by the end of the pipeline. If you removed too many during **Filter and Trim**, relax the parameters; if you loose a lot during **Merge paired reads** check that you did not trim too much (ITS are tricky here and you may even need to proceed just with FW reads); if you loose a lot during **Remove chimeras** then check tha primer removal or...maybe the PCR was not so good on the first place. These were my numbers for >700 samples (which included MOCK communites, PrepCo, NTC) from around 10 different sequencing batches. Notice the huge standard deviations... this means that there is a lot of variability between sequencing batches and between samples, so it's key to keep the same conditions for all the samples that we will later on process together, so that they are comparable. 
+
+|Step    |Percentage of reads lost|
+|--------|------------------------|
+|Filter and trim    |13.44 &plusmn; 10.1|
+|Merge paired reads    |15.61 &plusmn; 6.8|
+|Remove chimeras    |26.25 &plusmn; 9.6|
+
+
+
 
