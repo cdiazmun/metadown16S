@@ -86,6 +86,11 @@ You should always aim to have more than 50% of your total input reads retained b
 |Merge paired reads    |15.61 &plusmn; 6.8|
 |Remove chimeras    |26.25 &plusmn; 9.6|
 
+## Taxonomy assignment
+Still within the DADA2 pipeline we will assign the taxonomy to the ASVs we just inferred. To do that, DADA2 uses a bootstrapping approach (not pure similarity as OTUs) to assign a specific taxonomic level (ideally spesies, most often genus, and sometimes just family level or above). To do that, we make use of an already formatted database of bacteria, namely the Silva database, which is available at their [website](https://benjjneb.github.io/dada2/training.html) for download and use. For yeasts, I have always used the [UNITE database](https://unite.ut.ee/repository.php), although other exists. Another possibility is to use the Genome Taxonomy Database (GTDB), also available already formatted for DADA2 at their website. As DADA2 developers mention themselves: *The dada2 package also implements a method to make species level assignments based on exact matching between ASVs and sequenced reference strains. Recent analysis suggests that exact matching (or 100% identity) is the only appropriate way to assign species to 16S gene fragments.* Still, species-level assignmente using short reads must be interpreted with caution. If you really want to go to specis level safely, the use long-read sequencing of the full-length 16S or do metagenomics instead. 
 
+So, by the end of the pipeline you'll be able to export two files:
+- **The sequence table**: First column is the ASV sequence, rest of the columns are the counts of that ASV in each sample. Each row is an ASV
+- **The taxonomy table**: First column is the ASV sequence, rest of the columns are the taxonomic classification from Kingdom to Genus/Species. Each row is an ASV
 
 
