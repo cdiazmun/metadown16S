@@ -1,4 +1,4 @@
-# Rarefaction Analysis for 16S rRNA Amplicon Data: A Practical Guide
+# Rarefaction analysis
 
 ## Contents
 
@@ -22,7 +22,7 @@ Amplicon sequencing does not sample every organism in a sample equally. The numb
 Rarefaction has been debated. McMurdie and Holmes (2014) argued that discarding reads wastes information and that rarefying is not appropriate for every analysis, in particular differential abundance testing. The current practice, which we follow, is:
 
 - Use **rarefied** data for **alpha diversity** and **beta diversity**.
-- Use **unrarefied** counts (with a normalization or model suited to count data) for **differential abundance** testing.
+- Use **unrarefied** counts for **differential abundance** testing.
 
 Note that rarefaction is a statistical equalization of sampling effort, not a way to recover information that was not sequenced. Richness estimates for under-sampled samples are underestimates, and this should be stated when reporting results.
 
@@ -34,7 +34,7 @@ Note that rarefaction is a statistical equalization of sampling effort, not a wa
 | Sequencing depth | Total number of reads in a sample |
 | Rarefaction curve | Observed richness versus number of reads subsampled |
 | Saturation depth | The depth at which a sample's rarefaction curve has flattened |
-| Slope (rareslope) | Rate at which new ASVs appear per additional read at a given depth |
+| Rarefaction slope | Rate at which new ASVs appear per additional read at a given depth |
 | Cutoff | The common depth to which all retained samples are rarefied |
 
 ### Sources
@@ -57,9 +57,11 @@ The analysis has two separate objectives, and they use different criteria.
 
 *Question:* Has the sequencing depth of each sample been enough to represent the diversity present in that sample?
 
-*Criterion:* A sample is adequate if it is saturated within its own reads, that is, its saturation depth is no greater than its total depth. On a plot of sequencing depth (x) against saturation depth (y), adequate samples fall **below** the 1:1 line.
+*Criterion:* A sample is adequate if it is saturated within its own reads, that is, its saturation depth is lower than its total depth. On a plot of sequencing depth (x) against saturation depth (y), adequate samples fall below the 1:1 line.
 
-*Action:* Drop samples on or above the line. This decision does not depend on any common cutoff.
+*Action:* Drop samples on the line or too close. This decision does not depend on any common cutoff.
+
+*Applies to:* Any downstream analysis. 
 
 ### Objective 2: A common cutoff
 
@@ -69,65 +71,89 @@ The analysis has two separate objectives, and they use different criteria.
 
 *Action:* Count retained samples across candidate cutoffs, choose a cutoff where the count stops improving or where the loss of samples is no longer worth the gain in depth, then rarefy.
 
+*Applies to:* Diversity analyses. 
+
 Objective 1 is applied first, and objective 2 is applied to the samples that pass it.
 
 ---
 
 ## 3. Step-by-step guide
 
-The examples use R with the `vegan` package. The input is a DADA2 sequence table with **samples as columns and ASVs as rows**, which is the layout produced by `dada2::mergeSequenceTables()` or by iterative joins across sequencing runs. Adapt the transposition (`t()`) if your layout differs.
+Rarefaction is typically performed using functions embedded in the `vegan` package. The input is the DADA2 sequence table with **samples as columns and ASVs as rows**.
 
 ### Step 0: Load packages and prepare the table
 
 ```r
 library(vegan)
+library(dplyr)
+library(tidyr)
+library(readr)
+library(ggplot2)
+setwd("/path/to/your/working/directory/")
 
-# seqtab: ASVs x samples (rows = ASVs, columns = samples)
-# Full joins across runs introduce NAs for ASVs absent from a run.
-# Absent ASVs must be zero counts, not missing values.
+# Import the metadata files 
+meta <- read_delim("metadata/metadata_file.txt")
+# Clean the metadata file (if needed) to get only true samples
+meta_clean <- meta |> 
+  filter_out(SampleID %in% c("NTC", "MOCK", "PrepCo"))
+# Import the sequence table
+filereads <- list.files(path = "dada2/output/", pattern = "dada2_seqtab*", full.names = T)
+run_id <- sapply(strsplit(basename(filereads), split = "_"),`[`, 3)
+run_id <- sapply(strsplit(run_id, split = "[.]"),`[`, 1)
+
+seqtab <- NULL
+
+for (i in 1:length(run_id)){
+  df_r <- read_delim(filereads[i])
+  if (is.null(seqtab)){
+    seqtab<-df_r
+  } else {
+    seqtab <- seqtab |> 
+      full_join(df_r)
+  }
+}
+```
+Full joins across runs introduce NAs for ASVs absent from a run. Absent ASVs must be zero counts, not missing values.
+``` r
+# Transform NAs into 0s
 seqtab[is.na(seqtab)] <- 0
-seqtab <- as.matrix(seqtab)
-mode(seqtab) <- "numeric"
-
-stopifnot(sum(is.na(seqtab)) == 0, all(seqtab >= 0))
 ```
-
-Check for duplicated sequences. If the same sequence received different ASV identifiers in different runs, merge them by summing counts:
-
+We need to work with a numerical matrix, so let's remove the first column (ASVs)
 ```r
-length(unique(rownames(seqtab)))   # identifiers
-# If you have the sequences as a vector 'seqs' (one per row):
-length(unique(seqs))               # should match
-counts <- rowsum(seqtab, group = seqs)   # sums rows with identical sequences
-sum(seqtab) == sum(counts)               # total reads must be unchanged
+seqtab_rows <- seqtab[-1]
+row.names(seqtab_rows) <- seqtab$Sequence
 ```
-
-Remove mock communities and negative controls before computing depths, since they distort the cutoff.
-
+Remove mock communities and other controls before computing depths, since they distort the cutoff.
 ```r
-# Example: drop control samples by name
-controls <- c("MOCK", "NEG1")
-seqtab <- seqtab[, !colnames(seqtab) %in% controls]
+# Example
+no_samples <- meta$`NGS-Code`[meta$SampleID %in% c("MOCK", "NTC", "PrepCo")]
+
+seqtab_final <- seqtab_rows |> 
+  select(!(all_of(no_samples)))
 ```
 
 ### Step 1: Compute per-sample depth
 
-Depth is the column sum, because samples are columns.
+Get the per-sample read depth, which is basically the column sum, because samples are columns.
 
 ```r
 depth <- colSums(seqtab)
 summary(depth)
+sort(depth)
 ```
 
 Inspect the spread. Very low-depth samples are often failed libraries, and they should be identified before setting a cutoff.
 
 ### Step 2: Rarefaction curves (visual overview)
 
-`vegan::rarecurve()` expects samples as rows.
+`vegan::rarecurve()` expects samples as rows, so we need to transpose the matrix/data frame.
 
 ```r
-X <- t(seqtab)
-rare <- rarecurve(X, step = 1000, sample = min(depth), label = FALSE)
+tseqtab <- as.data.frame(t(seqtab_final))
+colnames(tseqtab) <- rownames(seqtab_final)
+# Plot the rarefaction curves
+rare <- rarecurve(tseqtab, step = 1000, sample = min(depth), label = FALSE,
+                  xlab = "Number of reads", ylab = "ASV Richness", col = "blue")
 ```
 
 Each curve shows observed ASVs against reads. Curves that flatten indicate saturation. This plot is useful for an overview, but the saturation depth is calculated in Step 3.
@@ -136,90 +162,96 @@ Each curve shows observed ASVs against reads. Curves that flatten indicate satur
 
 `rareslope()` returns the slope of the rarefaction curve at a given depth. A slope near zero means the sample is saturated at that depth.
 
-Because the function is evaluated for each sample at many depths, use a coarse grid (for example, every 1,000 reads) to keep runtime manageable.
+Because the function is evaluated for each sample at many depths, you can use a coarse grid (for example, every 1,000 reads) to keep runtime manageable. I didn't because I'm loco, so:
 
 ```r
-depth_grid <- seq(1000, 50000, by = 1000)
+slope <- rareslope(tseqtab, sample = depth - 1)
 
-# Slope matrix: samples as rows, depth grid as columns
-slopes <- t(sapply(seq_len(nrow(X)), function(i) {
-  sapply(depth_grid, function(n) {
-    if (n >= depth[i]) return(NA)          # depth beyond the sample's total
-    rareslope(X[i, ], sample = n)
-  })
-}))
-rownames(slopes) <- rownames(X)
-colnames(slopes) <- depth_grid
+# Clean the slope matrix
+depths <- as.numeric(sub("^N", "", colnames(slope)))
+ord <- order(depths)
+slope_ordered <- slope[, ord]
+depths_ordered <- depths[ord]
+```
+If a sample has a depth of 50,000, it doesn't make much sense to calculate the slope for N = 100,000. In our matrix it's 0, but it should be `NA`. We can use this to test if everything went well:
+```r
+# Depth beyond the sample's total: undefined
+slope_ordered[slope_ordered == 0] <- NA
 
-# Numerical noise to zero
-slopes[abs(slopes) < 1e-8] <- 0
+# Check the NA pattern against the sample depths
+last_valid <- apply(slope_ordered, 1, function(s) max(depths_ordered[!is.na(s)]))
+head(cbind(last_valid, depth))
 ```
 
 Choose a slope threshold from the data, not in advance. A common starting point is 0.01 (about 10 new ASVs per 1,000 reads), but check the distribution first:
 
 ```r
-hist(slopes[, which.min(abs(depth_grid - 10000))], breaks = 50,
-     main = "Slope at 10,000 reads", xlab = "Slope")
-
-# A few samples, including low- and high-richness ones
-matplot(depth_grid, t(slopes[c(1, 100, 300), ]), type = "l", log = "x",
-        xlab = "Reads", ylab = "Slope")
+# Change the number of reads to see (5000, 10000, 20000, ...)
+col_idx <- which.min(abs(depths_ordered - 10000))
+hist(slope_ordered[, col_idx], breaks = 50, main = "Slope at 10,000 reads", xlab = "Slope")
 ```
 
-Compute the saturation depth for each sample: the smallest grid depth at which the slope falls below the threshold.
+Check how many samples reach saturation (slope < 0.01) with that read cutoff. Now we can compute the saturation depth for each sample: the smallest grid depth at which the slope falls below the threshold.
 
 ```r
 threshold <- 0.01
-sat_depth <- apply(slopes, 1, function(s) {
+sat_depth <- apply(slope_ordered, 1, function(s) {
   i <- which(s < threshold)[1]
-  if (is.na(i)) NA else depth_grid[i]
+  if (is.na(i)) NA else depths_ordered[i]
 })
-names(sat_depth) <- rownames(X)
-
-sum(is.na(sat_depth))              # samples that never reached the threshold
 summary(sat_depth)
+
+# Inspect the sat_depth by depth
+head(cbind(sat_depth, depth))
+# Put it on a data frame
+sat_df <- as.data.frame(cbind(sat_depth, depth)) |> 
+  mutate(sampleID = rownames(sat_df),
+         enough_depth = ifelse(sat_depth <= depth, TRUE, FALSE))
 ```
-
-Watch for two issues:
-
-- **Non-monotone curves.** Some curves flatten, rise again, then flatten. Check a few samples visually before trusting `which()`.
-- **Grid ceiling.** Samples with `NA` saturation may need a larger grid. Check whether any values equal the maximum grid depth, since these may not have saturated.
 
 ### Step 4: Objective 1 — per-sample adequacy
 
-Compare each sample's depth with its saturation depth. A sample is adequate if its depth is at least its saturation depth.
+Compare each sample's depth with its saturation depth. A sample is adequate if its depth is greater than its saturation depth.
 
 ```r
-keep1 <- !is.na(sat_depth) & depth >= sat_depth
-sum(!keep1)                         # samples dropped
-names(depth)[!keep1]
-
-plot(depth, sat_depth, log = "xy",
-     xlab = "Sample depth (reads)", ylab = "Saturation depth (reads)")
-abline(0, 1)                        # points below this line are adequate
+plot(sat_df$depth, sat_df$sat_depth, log = "xy",
+     xlab = "Sequencing depth (ASVs)", ylab = "Saturation depth (ASVs)")
+abline(0,1)                        # points below this line are adequate
 ```
 
-Samples on or above the line are dropped. Samples with `NA` saturation are excluded by this rule, so resolve them first if you want to retain them.
+Samples on the line or very close to it should be dropped.
 
 ### Step 5: Objective 2 — choosing a common cutoff
 
-For each candidate cutoff, count samples that are both deep enough and saturated at that depth.
+For each candidate cutoff, count samples that are both deep enough and saturated at that depth. If your cutoff is *e.g.,* 10,000 reads, then you'll only retain samples that fulfill two criteria: sequencing depth &ge; 10,000 AND saturation depth &le; 10,000. In our case, we are selecting 20,000 reads, which is a very good compromise to retain most of the samples. It's actually 19,693, which is the closest depth to 20,000. 
 
 ```r
-cands <- seq(5000, 50000, by = 5000)
-retained <- sapply(cands, function(cu) {
-  sum(keep1 & depth >= cu & sat_depth <= cu)
-})
-data.frame(cutoff = cands, retained = retained)
+sat_df <- sat_df |> 
+  mutate(sat_20k = ifelse(sat_depth <= 19693 & depth >= 19693, "pass", "fail"))
 ```
 
 Plot the cutoff with the depth-saturation data to see which samples are excluded:
 
 ```r
-plot(depth, sat_depth, log = "xy",
-     xlab = "Sample depth (reads)", ylab = "Saturation depth (reads)")
-abline(0, 1)
-abline(h = cutoff, col = "red")       # replace 'cutoff' with your chosen value
+ggplot(sat_df, aes(x = depth/1000, y = sat_depth/1000, color = sat_20k)) + 
+  geom_point() + 
+  geom_hline(yintercept = 19.693, linetype = "dashed", color = "darkred") +
+  geom_vline(xintercept = 19.693, linetype = "dashed", color = "darkred") +
+  geom_abline(slope = 1) +
+  scale_y_log10() +
+  scale_x_log10() + 
+  scale_color_manual(values = c("darkgray", "darkred")) +
+  theme_bw() +
+  theme(
+    legend.position = "inside",
+    legend.position.inside = c(0.1, 0.9),
+    panel.grid = element_blank(),
+    axis.text = element_text(color = "black")
+  ) + 
+  labs(x="Sequencing depth (ASVs, in thousands)",
+       y="Saturation depth (ASVs, in thousands)")
+
+ggsave("rarefaction/seqdepth_vs_satdepth_threshold.png", width = 8.5, height = 6, units = "in", dpi = 300)
 ```
 
 Choose the cutoff where the retained count levels off, or where the next step in cutoff would cost more samples than it gains in depth. Check the sensitivity of this choice to the slope threshold by repeating Steps 3–5 with thresholds such as 0.005 and 0.02. If the chosen cutoff changes substantially, report that the result depends on the threshold.
@@ -227,9 +259,8 @@ Choose the cutoff where the retained count levels off, or where the next step in
 Then retain the samples that pass both objectives:
 
 ```r
-cutoff <- 30000                        # example value; choose from Step 5
-keep <- keep1 & depth >= cutoff & sat_depth <= cutoff
-X_final <- X[keep, ]
+cutoff <- 20000
+tseqtab_kept <- tseqtab[depth >= cutoff, ]
 ```
 
 ### Step 6: Rarefy and compute diversity
